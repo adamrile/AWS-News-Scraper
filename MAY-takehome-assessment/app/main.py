@@ -9,50 +9,57 @@ import json
 import requests
 from create_tables import get_db_connection
 
-COMP_DATA = './competition_data'
-TEAMS_DATA = './teams'
-OUTPUT_CSV = './output'
+COMP_DATA = './output/competition_data'
+TEAMS_DATA = './output/teams'
+OUTPUT_CSV = './output/output_csv'
 
-def ingest_comp_data(url: str, headers: str = None) -> list:
-    """ingests the competition data from the API and returns
-    the data in JSON format and list of competition codes"""
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        competition_code = [comp["code"] for comp in data["competitions"]]
-        return competition_code, data
-    return f"Error:, {response.status_code}"
-
-def ingest_team_data(url: str, headers: str = None) -> list:
-    """Ingests team data using the team_url in the main function
-    and returns the data in JSON format"""
+def fetch_data(url: str, headers: str = None) -> dict:
+    """Fetches data from the given URL with the given headers and
+    returns the response JSON"""
     response = requests.get(url, headers=headers)
     if response.status_code == 200:
         data = response.json()
         return data
-    return f"Error:, {response.status_code}"
+    return f"Error: {response.status_code}"
+
+def ingest_comp_data(url: str, headers: str = None) -> tuple:
+    """Ingests the competition data from the API and returns the data
+    in JSON format and list of competition codes"""
+    data = fetch_data(url, headers)
+    competition_code = [comp["code"] for comp in data["competitions"]]
+    return competition_code, data
+
+def ingest_team_data(url: str, headers: str = None) -> dict:
+    """Ingests team data using the team_url in the main function and
+    returns the data in JSON format"""
+    return fetch_data(url, headers)
+
 
 def insert_comp_data(comp_data: list) -> str:
-    """This function collects the comp_ids and comp_names for all football competitions extracted
-    from the API then inserts it into the dims_competition table"""
+    """This function collects the comp_ids and comp_names for all
+    football competitions extracted from the API then inserts it into
+    the dims_competition table"""
     conn = get_db_connection()
     cur = conn.cursor()
     # Insert data into dim_teams table
     for comp in comp_data["competitions"]:
         comp_id = comp["id"]
         comp_name = comp["name"]
+
         # Check if the team already exists in the dim_teams table
-        cur.execute("SELECT id FROM dim_competitions WHERE id = %s", (comp_id,))
+        # query = "SELECT id FROM dim_competitions WHERE id = %s"
+        table = "SELECT * FROM dim_competitions"
+
+        query = "SELECT id FROM dim_competitions WHERE id = %s"
+        cur.execute(query, (comp_id,))
         result = cur.fetchone()
-        print(result)
-        print(comp_id)
-        print(comp_name)
         if result is not None:
             print(f"Competition {comp_name} (id {comp_id}) already exists in table")
         else:
             cur.execute("INSERT INTO dim_competitions (id, name) VALUES \
                     (%s, %s)", (comp_id, comp_name))
             print(f"{comp_name} (id {comp_id}) inserted into dim_competitions table")
+
     conn.commit()
     cur.close()
     conn.close()
@@ -74,7 +81,7 @@ def insert_team_data(team_data: list, comp_id: list) -> str:
         # Check if the team already exists in the dim_teams table
         cur.execute("SELECT id FROM dim_teams WHERE id = %s", (team_id,))
         result = cur.fetchone()
-        print(result)
+        # print(result)
         if result is not None:
             print(f"Team {team_name} (id {team_id}) already exists in dim_teams table")
         else:
@@ -89,7 +96,7 @@ def insert_team_data(team_data: list, comp_id: list) -> str:
             cur.execute("SELECT 1 FROM fact_competitions WHERE competition_id = %s AND team_id = %s", (comp_id, team_id))
             result = cur.fetchone()
             if result is not None:
-                print(f"Team {team_name} (id {team_id}) already exists for competition id {comp_id}")
+                print(f"Team {team_name} (id {team_id}) already exists for competition id {comp_id} in fact_competitions")
             else:
                 cur.execute("INSERT INTO fact_competitions (competition_id, team_id) VALUES (%s, %s)", (comp_id, team_id))
                 print(f"{team_name} (id {team_id}) inserted into fact_competitions table")
@@ -104,7 +111,6 @@ def insert_team_data(team_data: list, comp_id: list) -> str:
 def output_summary_csv():
     """This function executes a SQL query to count the teams that play
     in particular football competitions"""
-
     conn = get_db_connection()
     cur = conn.cursor()
     query = '''
@@ -138,7 +144,6 @@ def main():
     codes, comp_data = ingest_comp_data(comp_url, headers=headers)
     insert_comp_data(comp_data)
 
-
     if not os.path.exists(COMP_DATA):
         os.makedirs(COMP_DATA)
 
@@ -146,6 +151,7 @@ def main():
     with open(competition_file, 'w') as file:
         json.dump(comp_data, file)
 
+    #using the competition code to locate respective team API data
     for code in codes:
         team_url = f"http://api.football-data.org/v4/competitions/{code}/teams"
         team_data = ingest_team_data(team_url, headers=headers)
@@ -163,7 +169,7 @@ def main():
                 with open(teams_file, 'w') as file:
                     file.write(str(team_data))
 
-            # API Throttle control
+            # API Throttle control: 6 second pause
             time.sleep(pause_time)
 
     output_summary_csv()
